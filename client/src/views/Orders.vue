@@ -27,6 +27,54 @@
         </div>
       </div>
 
+      <div class="card submitted-card">
+        <div class="card-header">
+          <h3 class="card-title">{{ t('orders.submittedTitle') }} ({{ restockOrders.length }})</h3>
+        </div>
+        <p v-if="restockOrders.length === 0" class="submitted-empty">
+          {{ t('orders.submittedEmpty') }}
+          <router-link to="/restocking">{{ t('nav.restocking') }}</router-link>
+        </p>
+        <div v-else class="table-container">
+          <table class="orders-table">
+            <thead>
+              <tr>
+                <th class="col-order-number">{{ t('orders.table.orderNumber') }}</th>
+                <th class="col-items">{{ t('orders.table.items') }}</th>
+                <th class="col-value">{{ t('orders.table.totalValue') }}</th>
+                <th class="col-date">{{ t('orders.table.orderDate') }}</th>
+                <th class="col-lead">{{ t('orders.submittedLeadTime') }}</th>
+                <th class="col-date">{{ t('orders.table.expectedDelivery') }}</th>
+                <th class="col-status">{{ t('orders.table.status') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="ro in restockOrders" :key="ro.id">
+                <td class="col-order-number"><strong>{{ ro.order_number }}</strong></td>
+                <td class="col-items">
+                  <details class="items-details">
+                    <summary class="items-summary">
+                      {{ t('orders.itemsCount', { count: ro.items.length }) }}
+                    </summary>
+                    <div class="items-dropdown">
+                      <div v-for="item in ro.items" :key="item.sku" class="item-entry">
+                        <span class="item-name">{{ translateProductName(item.name) }}</span>
+                        <span class="item-meta">{{ t('orders.quantity') }}: {{ item.quantity }} @ {{ formatCurrency(item.unit_cost, currentCurrency) }}</span>
+                      </div>
+                    </div>
+                  </details>
+                </td>
+                <td class="col-value"><strong>{{ formatCurrency(ro.total_value, currentCurrency) }}</strong></td>
+                <td class="col-date">{{ formatDate(ro.order_date) }}</td>
+                <td class="col-lead">{{ t('orders.submittedDays', { count: ro.lead_time_days }) }}</td>
+                <td class="col-date">{{ formatDate(ro.expected_delivery) }}</td>
+                <td class="col-status"><span class="badge info">{{ t('orders.submittedStatus') }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-header">
           <h3 class="card-title">{{ t('orders.allOrders') }} ({{ orders.length }})</h3>
@@ -83,6 +131,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '../api'
 import { useFilters } from '../composables/useFilters'
 import { useI18n } from '../composables/useI18n'
+import { formatCurrency } from '../utils/currency'
 
 export default {
   name: 'Orders',
@@ -95,6 +144,8 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+    // Restock orders are not affected by the global filters (no warehouse/category)
+    const restockOrders = ref([])
 
     // Use shared filters
     const {
@@ -109,7 +160,11 @@ export default {
       try {
         loading.value = true
         const filters = getCurrentFilters()
-        const fetchedOrders = await api.getOrders(filters)
+        const [fetchedOrders, fetchedRestock] = await Promise.all([
+          api.getOrders(filters),
+          api.getRestockOrders()
+        ])
+        restockOrders.value = fetchedRestock
 
         // Sort orders by order_date (earliest first)
         orders.value = fetchedOrders.sort((a, b) => {
@@ -146,7 +201,9 @@ export default {
     const formatDate = (dateString) => {
       const { currentLocale } = useI18n()
       const locale = currentLocale.value === 'ja' ? 'ja-JP' : 'en-US'
-      return new Date(dateString).toLocaleDateString(locale, {
+      const d = new Date(dateString)
+      if (isNaN(d.getTime())) return '-'
+      return d.toLocaleDateString(locale, {
         year: 'numeric',
         month: 'short',
         day: 'numeric'
@@ -160,6 +217,9 @@ export default {
       loading,
       error,
       orders,
+      restockOrders,
+      currentCurrency,
+      formatCurrency,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
@@ -201,6 +261,20 @@ export default {
 
 .col-value {
   width: 120px;
+}
+
+.col-lead {
+  width: 110px;
+}
+
+.submitted-card {
+  margin-bottom: 1.5rem;
+}
+
+.submitted-empty {
+  padding: 1rem 1.5rem;
+  color: #64748b;
+  font-size: 0.875rem;
 }
 
 /* Items details styling */
