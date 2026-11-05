@@ -6,6 +6,7 @@ export default {
     orders: 'Orders',
     finance: 'Finance',
     demandForecast: 'Demand Forecast',
+    restocking: 'Restocking',
     companyName: 'Catalyst Components',
     subtitle: 'Inventory Management System'
   },
@@ -112,6 +113,12 @@ export default {
     onTimeDelivery: 'On-Time Delivery',
     itemsCount: '{count} items',
     quantity: 'Qty',
+    submittedTitle: 'Submitted Orders',
+    submittedLoadFailed: 'Failed to load submitted restock orders',
+    submittedEmpty: 'No restock orders have been submitted yet. Use the Restocking tab to place one.',
+    submittedLeadTime: 'Lead Time',
+    submittedDays: '{count} days',
+    submittedStatus: 'Submitted',
     table: {
       orderNumber: 'Order Number',
       orderId: 'Order ID',
@@ -185,6 +192,40 @@ export default {
       change: 'Change',
       trend: 'Trend',
       period: 'Period'
+    }
+  },
+
+  // Restocking
+  restocking: {
+    title: 'Restocking',
+    description: 'Plan a restock order within your budget, prioritized by forecasted demand',
+    budget: 'Budget',
+    budgetHelp: 'Move the slider to auto-select items for the budget. You can then adjust selections and quantities.',
+    summary: 'Order Summary',
+    selectedTotal: 'Selected Total',
+    remaining: 'Remaining',
+    overBy: 'Over Budget By',
+    selectedItems: 'Selected Items',
+    leadTime: 'Order Lead Time',
+    days: '{count} days',
+    expectedDelivery: 'Expected Delivery',
+    overBudgetWarning: 'The selected total exceeds the budget. Reduce quantities or deselect items.',
+    items: 'Items',
+    placeOrder: 'Place Order',
+    submitting: 'Submitting...',
+    successMessage: 'Order {orderNumber} has been submitted.',
+    viewOrders: 'View in Orders',
+    submitFailed: 'Failed to place the order. Please try again.',
+    loadFailed: 'Failed to load demand forecasts',
+    table: {
+      select: 'Select',
+      sku: 'SKU',
+      itemName: 'Item Name',
+      trend: 'Trend',
+      unitCost: 'Unit Cost',
+      quantity: 'Quantity',
+      lineTotal: 'Line Total',
+      leadTime: 'Lead Time (days)'
     }
   },
 

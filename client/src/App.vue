@@ -22,6 +22,9 @@
           <router-link to="/demand" :class="{ active: $route.path === '/demand' }">
             {{ t('nav.demandForecast') }}
           </router-link>
+          <router-link to="/restocking" :class="{ active: $route.path === '/restocking' }">
+            {{ t('nav.restocking') }}
+          </router-link>
           <router-link to="/reports" :class="{ active: $route.path === '/reports' }">
             Reports
           </router-link>
@@ -228,6 +231,26 @@ body {
   font-weight: 400;
   padding-left: 0.75rem;
   border-left: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.logo h1 {
+  white-space: nowrap;
+}
+
+/* The subtitle is the first thing to go: title + subtitle + 7 nav links + profile
+   overflows (~20px at 1440px), so hide it below 1500px. */
+@media (max-width: 1499px) {
+  .subtitle {
+    display: none;
+  }
+}
+
+/* Below ~1280px also tighten the container padding. */
+@media (max-width: 1279px) {
+  .nav-container {
+    padding: 0 1rem;
+  }
 }
 
 .nav-tabs {
@@ -236,7 +259,7 @@ body {
 }
 
 .nav-tabs a {
-  padding: 0.625rem 1.25rem;
+  padding: 0.625rem 0.75rem;
   color: #64748b;
   text-decoration: none;
   font-weight: 500;
@@ -244,6 +267,7 @@ body {
   border-radius: 6px;
   transition: all 0.2s ease;
   position: relative;
+  white-space: nowrap;
 }
 
 .nav-tabs a:hover {

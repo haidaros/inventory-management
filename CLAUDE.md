@@ -47,6 +47,7 @@ npm install && npm run dev
 **Filter System**: 4 filters (Time Period, Warehouse, Category, Order Status) apply to all data via query params
 **Data Flow**: Vue filters → `client/src/api.js` → FastAPI → In-memory filtering → Pydantic validation → Computed properties
 **Reactivity**: Raw data in refs (`allOrders`, `inventoryItems`), derived data in computed properties
+**Comments**: Always document non-obvious logic changes with comments explaining why
 
 ## API Endpoints
 - `GET /api/inventory` - Filters: warehouse, category

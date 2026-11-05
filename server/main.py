@@ -1,3 +1,7 @@
+import math
+import threading
+import uuid
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
@@ -89,6 +93,8 @@ class DemandForecast(BaseModel):
     forecasted_demand: int
     trend: str
     period: str
+    unit_cost: float
+    lead_time_days: int
 
 class BacklogItem(BaseModel):
     id: str
@@ -100,6 +106,9 @@ class BacklogItem(BaseModel):
     days_delayed: int
     priority: str
     has_purchase_order: Optional[bool] = False
+    # The dashboard decides between "Create PO" and "View PO" from this id, so it must
+    # be populated on load, not just set client-side after creating a PO
+    purchase_order_id: Optional[str] = None
 
 class PurchaseOrder(BaseModel):
     id: str
@@ -119,6 +128,60 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class Task(BaseModel):
+    id: str
+    title: str
+    priority: str
+    # camelCase to match the task shape the frontend already uses for its mock tasks
+    dueDate: str
+    status: str
+
+class CreateTaskRequest(BaseModel):
+    title: str
+    priority: str = "medium"
+    dueDate: str
+
+class RestockOrderItemRequest(BaseModel):
+    sku: str
+    quantity: int
+
+class CreateRestockOrderRequest(BaseModel):
+    budget: float
+    items: List[RestockOrderItemRequest]
+
+class RestockOrderItem(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_cost: float
+    lead_time_days: int
+    line_total: float
+
+class RestockOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[RestockOrderItem]
+    total_value: float
+    budget: float
+    lead_time_days: int
+    order_date: str
+    expected_delivery: str
+    status: str
+
+# Submitted restocking orders live in memory only and reset on server restart
+restock_orders: list = []
+# Sync endpoints run in a threadpool, so guard numbering + append against concurrent POSTs
+restock_orders_lock = threading.Lock()
+
+# Purchase orders start from purchase_orders.json and new ones are appended in memory;
+# the lock keeps the one-PO-per-backlog-item check and the append atomic
+purchase_orders_lock = threading.Lock()
+
+# User tasks live in memory only and reset on server restart
+tasks: list = []
+tasks_lock = threading.Lock()
+VALID_TASK_PRIORITIES = {"low", "medium", "high"}
 
 # API endpoints
 @app.get("/")
@@ -174,10 +237,171 @@ def get_backlog():
     for item in backlog_items:
         item_dict = dict(item)
         # Check if this backlog item has a purchase order
-        has_po = any(po["backlog_item_id"] == item["id"] for po in purchase_orders)
-        item_dict["has_purchase_order"] = has_po
+        po = next((po for po in purchase_orders if po["backlog_item_id"] == item["id"]), None)
+        item_dict["has_purchase_order"] = po is not None
+        item_dict["purchase_order_id"] = po["id"] if po else None
         result.append(item_dict)
     return result
+
+@app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
+def create_purchase_order(request: CreatePurchaseOrderRequest):
+    """Create a purchase order to cover a backlog item's shortage"""
+    if not any(item["id"] == request.backlog_item_id for item in backlog_items):
+        raise HTTPException(status_code=404, detail=f"Backlog item {request.backlog_item_id} not found")
+    if not request.supplier_name.strip():
+        raise HTTPException(status_code=400, detail="Supplier name is required")
+    if request.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive")
+    # Manual check instead of a Pydantic constraint, for the same NaN reason as restock budgets
+    if not math.isfinite(request.unit_cost) or request.unit_cost <= 0:
+        raise HTTPException(status_code=400, detail="Unit cost must be a positive finite number")
+    try:
+        datetime.strptime(request.expected_delivery_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Expected delivery date must be YYYY-MM-DD")
+
+    with purchase_orders_lock:
+        if any(po["backlog_item_id"] == request.backlog_item_id for po in purchase_orders):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Backlog item {request.backlog_item_id} already has a purchase order"
+            )
+        po = {
+            "id": f"PO-{len(purchase_orders) + 1:04d}",
+            "backlog_item_id": request.backlog_item_id,
+            "supplier_name": request.supplier_name.strip(),
+            "quantity": request.quantity,
+            "unit_cost": request.unit_cost,
+            "expected_delivery_date": request.expected_delivery_date,
+            "status": "Pending",
+            "created_date": datetime.now().replace(microsecond=0).isoformat(),
+            "notes": request.notes
+        }
+        purchase_orders.append(po)
+    return po
+
+@app.get("/api/purchase-orders/{backlog_item_id}", response_model=PurchaseOrder)
+def get_purchase_order_by_backlog_item(backlog_item_id: str):
+    """Get the purchase order for a backlog item"""
+    po = next((po for po in purchase_orders if po["backlog_item_id"] == backlog_item_id), None)
+    if not po:
+        raise HTTPException(status_code=404, detail=f"Purchase order for backlog item {backlog_item_id} not found")
+    return po
+
+@app.get("/api/tasks", response_model=List[Task])
+def get_tasks():
+    """Get user tasks, newest first"""
+    return list(reversed(tasks))
+
+@app.post("/api/tasks", response_model=Task, status_code=201)
+def create_task(request: CreateTaskRequest):
+    """Create a task"""
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    if request.priority not in VALID_TASK_PRIORITIES:
+        raise HTTPException(status_code=400, detail="Priority must be low, medium or high")
+    try:
+        datetime.strptime(request.dueDate, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Due date must be YYYY-MM-DD")
+
+    # String ids so they never collide with the frontend's numeric mock task ids,
+    # which App.vue merges into the same list and tells apart by id
+    task = {
+        "id": f"task-{uuid.uuid4().hex[:12]}",
+        "title": title,
+        "priority": request.priority,
+        "dueDate": request.dueDate,
+        "status": "pending"
+    }
+    with tasks_lock:
+        tasks.append(task)
+    return task
+
+@app.patch("/api/tasks/{task_id}", response_model=Task)
+def toggle_task(task_id: str):
+    """Toggle a task between pending and completed"""
+    with tasks_lock:
+        task = next((t for t in tasks if t["id"] == task_id), None)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        task["status"] = "completed" if task["status"] == "pending" else "pending"
+        return task
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    """Delete a task"""
+    with tasks_lock:
+        index = next((i for i, t in enumerate(tasks) if t["id"] == task_id), None)
+        if index is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        tasks.pop(index)
+    return {"deleted": task_id}
+
+@app.get("/api/restock-orders", response_model=List[RestockOrder])
+def get_restock_orders():
+    """Get submitted restocking orders, newest first"""
+    return list(reversed(restock_orders))
+
+@app.post("/api/restock-orders", response_model=RestockOrder, status_code=201)
+def create_restock_order(request: CreateRestockOrderRequest):
+    """Submit a restocking order for demand forecast items"""
+    # Checked here rather than with a Pydantic constraint: a 422 for NaN would echo the NaN
+    # back and fail JSON serialization. NaN must be rejected because comparisons against it
+    # are always False, which would let any order through the budget check below.
+    if not math.isfinite(request.budget) or request.budget < 0:
+        raise HTTPException(status_code=400, detail="Budget must be a non-negative finite number")
+    if not request.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    skus = [item.sku for item in request.items]
+    if len(skus) != len(set(skus)):
+        raise HTTPException(status_code=400, detail="Each SKU may appear only once per order")
+
+    forecasts_by_sku = {f["item_sku"]: f for f in demand_forecasts}
+    order_items = []
+    for requested in request.items:
+        forecast = forecasts_by_sku.get(requested.sku)
+        if not forecast:
+            raise HTTPException(status_code=400, detail=f"Unknown SKU {requested.sku}")
+        if requested.quantity <= 0:
+            raise HTTPException(status_code=400, detail=f"Quantity for {requested.sku} must be positive")
+        # Prices come from the forecast catalog, not the client, so the budget check can't be bypassed
+        order_items.append({
+            "sku": requested.sku,
+            "name": forecast["item_name"],
+            "quantity": requested.quantity,
+            "unit_cost": forecast["unit_cost"],
+            "lead_time_days": forecast["lead_time_days"],
+            "line_total": round(requested.quantity * forecast["unit_cost"], 2)
+        })
+
+    total_value = round(sum(item["line_total"] for item in order_items), 2)
+    if total_value > request.budget:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order total {total_value} exceeds budget {request.budget}"
+        )
+
+    # The order is delivered complete, so it arrives when its slowest item does
+    lead_time_days = max(item["lead_time_days"] for item in order_items)
+    order_date = datetime.now().replace(microsecond=0)
+    with restock_orders_lock:
+        sequence = len(restock_orders) + 1
+        order = {
+            "id": f"restock-{sequence}",
+            "order_number": f"RST-{sequence:04d}",
+            "items": order_items,
+            "total_value": total_value,
+            "budget": request.budget,
+            "lead_time_days": lead_time_days,
+            "order_date": order_date.isoformat(),
+            "expected_delivery": (order_date + timedelta(days=lead_time_days)).isoformat(),
+            "status": "Submitted"
+        }
+        restock_orders.append(order)
+    return order
 
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary(

@@ -156,6 +156,14 @@ const handleLogout = () => {
   font-size: 0.875rem;
   font-weight: 500;
   color: #0f172a;
+  white-space: nowrap;
+}
+
+/* Keep only the avatar below 1280px so the header fits without clipping. */
+@media (max-width: 1279px) {
+  .profile-name {
+    display: none;
+  }
 }
 
 .chevron {
