@@ -34,11 +34,11 @@
       <div class="stats-grid">
         <div :class="['stat-card', overBudget ? 'danger' : 'info']">
           <div class="stat-label">{{ t('restocking.selectedTotal') }}</div>
-          <div class="stat-value">{{ formatCurrency(selectedTotal, currentCurrency) }}</div>
+          <div class="stat-value">{{ formatMoney(selectedTotal, currentCurrency) }}</div>
         </div>
         <div :class="['stat-card', overBudget ? 'danger' : 'success']">
           <div class="stat-label">{{ overBudget ? t('restocking.overBy') : t('restocking.remaining') }}</div>
-          <div class="stat-value">{{ formatCurrency(Math.abs(budget - selectedTotal), currentCurrency) }}</div>
+          <div class="stat-value">{{ formatMoney(Math.abs(budget - selectedTotal), currentCurrency) }}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">{{ t('restocking.selectedItems') }}</div>
@@ -87,7 +87,7 @@
                 <td>
                   <span :class="['badge', row.trend]">{{ t(`trends.${row.trend}`) }}</span>
                 </td>
-                <td class="num">{{ formatCurrency(row.unit_cost, currentCurrency) }}</td>
+                <td class="num">{{ formatMoney(row.unit_cost, currentCurrency) }}</td>
                 <td class="num">
                   <input
                     type="number"
@@ -96,11 +96,11 @@
                     step="1"
                     :value="row.quantity"
                     :aria-label="t('restocking.table.quantity')"
-                    @input="onQuantity(row, $event.target.value)"
+                    @change="onQuantity(row, $event)"
                   />
                 </td>
                 <td class="num">
-                  <strong>{{ formatCurrency(row.lineTotal, currentCurrency) }}</strong>
+                  <strong>{{ formatMoney(row.lineTotal, currentCurrency) }}</strong>
                 </td>
                 <td class="num">{{ row.lead_time_days }}</td>
               </tr>
@@ -128,7 +128,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { api } from '../api'
 import { useI18n } from '../composables/useI18n'
-import { formatCurrency } from '../utils/currency'
+import { formatCurrency, formatCurrencyWithDecimals } from '../utils/currency'
 
 // Trend priority: items with rising demand are the most urgent to restock
 const TREND_RANK = { increasing: 0, stable: 1, decreasing: 2 }
@@ -149,8 +149,13 @@ export default {
     const submitting = ref(false)
     const submitError = ref(null)
     const successOrder = ref(null)
+    // True after a successful submit until the user edits anything, so a repeat click
+    // can't create a duplicate identical order
+    const justSubmitted = ref(false)
 
     const budgetStep = BUDGET_STEP
+    // Cents matter for unit costs and totals (whole dollars hid e.g. $8.75 and "over by $0")
+    const formatMoney = (amount, currency) => formatCurrencyWithDecimals(amount, currency, 2)
 
     // Max budget = cost of fully covering every forecast, rounded up to the next 1,000
     const maxBudget = computed(() => {
@@ -211,6 +216,7 @@ export default {
       selection.value = sel
       quantities.value = qty
       successOrder.value = null
+      justSubmitted.value = false
     }
 
     watch(budget, applyAutoPick)
@@ -248,18 +254,25 @@ export default {
     })
 
     const canSubmit = computed(() =>
-      selectedItems.value.length > 0 && !overBudget.value && !submitting.value)
+      selectedItems.value.length > 0 && !overBudget.value && !submitting.value && !justSubmitted.value)
 
     const onToggle = (row, checked) => {
+      justSubmitted.value = false
       selection.value = { ...selection.value, [row.item_sku]: checked }
       if (checked && !(quantities.value[row.item_sku] > 0)) {
         quantities.value = { ...quantities.value, [row.item_sku]: row.forecasted_demand }
       }
     }
 
-    const onQuantity = (row, raw) => {
-      const parsed = Math.floor(Number(raw))
+    // Committed on @change (blur/Enter), not on every keystroke: updating state mid-typing
+    // made Vue rewrite the box (an empty box became "0", giving "07"). Writing the normalized
+    // value back to the element also fixes cases like "2.5" -> 2 where state didn't change
+    // and Vue would otherwise leave the stale text in place.
+    const onQuantity = (row, event) => {
+      justSubmitted.value = false
+      const parsed = Math.floor(Number(event.target.value))
       const qty = Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+      event.target.value = String(qty)
       quantities.value = { ...quantities.value, [row.item_sku]: qty }
       selection.value = { ...selection.value, [row.item_sku]: qty > 0 }
     }
@@ -274,6 +287,7 @@ export default {
           budget: budget.value,
           items: selectedItems.value.map(i => ({ sku: i.item_sku, quantity: i.quantity }))
         })
+        justSubmitted.value = true
       } catch (err) {
         submitError.value = err.response?.data?.detail || t('restocking.submitFailed')
       } finally {
@@ -305,6 +319,7 @@ export default {
       currentCurrency,
       translateProductName,
       formatCurrency,
+      formatMoney,
       loading,
       error,
       budget,

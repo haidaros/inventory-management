@@ -1,3 +1,5 @@
+import math
+import threading
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -152,6 +154,8 @@ class RestockOrder(BaseModel):
 
 # Submitted restocking orders live in memory only and reset on server restart
 restock_orders: list = []
+# Sync endpoints run in a threadpool, so guard numbering + append against concurrent POSTs
+restock_orders_lock = threading.Lock()
 
 # API endpoints
 @app.get("/")
@@ -220,8 +224,17 @@ def get_restock_orders():
 @app.post("/api/restock-orders", response_model=RestockOrder, status_code=201)
 def create_restock_order(request: CreateRestockOrderRequest):
     """Submit a restocking order for demand forecast items"""
+    # Checked here rather than with a Pydantic constraint: a 422 for NaN would echo the NaN
+    # back and fail JSON serialization. NaN must be rejected because comparisons against it
+    # are always False, which would let any order through the budget check below.
+    if not math.isfinite(request.budget) or request.budget < 0:
+        raise HTTPException(status_code=400, detail="Budget must be a non-negative finite number")
     if not request.items:
         raise HTTPException(status_code=400, detail="Order must contain at least one item")
+
+    skus = [item.sku for item in request.items]
+    if len(skus) != len(set(skus)):
+        raise HTTPException(status_code=400, detail="Each SKU may appear only once per order")
 
     forecasts_by_sku = {f["item_sku"]: f for f in demand_forecasts}
     order_items = []
@@ -251,19 +264,20 @@ def create_restock_order(request: CreateRestockOrderRequest):
     # The order is delivered complete, so it arrives when its slowest item does
     lead_time_days = max(item["lead_time_days"] for item in order_items)
     order_date = datetime.now().replace(microsecond=0)
-    sequence = len(restock_orders) + 1
-    order = {
-        "id": f"restock-{sequence}",
-        "order_number": f"RST-{sequence:04d}",
-        "items": order_items,
-        "total_value": total_value,
-        "budget": request.budget,
-        "lead_time_days": lead_time_days,
-        "order_date": order_date.isoformat(),
-        "expected_delivery": (order_date + timedelta(days=lead_time_days)).isoformat(),
-        "status": "Submitted"
-    }
-    restock_orders.append(order)
+    with restock_orders_lock:
+        sequence = len(restock_orders) + 1
+        order = {
+            "id": f"restock-{sequence}",
+            "order_number": f"RST-{sequence:04d}",
+            "items": order_items,
+            "total_value": total_value,
+            "budget": request.budget,
+            "lead_time_days": lead_time_days,
+            "order_date": order_date.isoformat(),
+            "expected_delivery": (order_date + timedelta(days=lead_time_days)).isoformat(),
+            "status": "Submitted"
+        }
+        restock_orders.append(order)
     return order
 
 @app.get("/api/dashboard/summary")

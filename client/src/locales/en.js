@@ -114,6 +114,7 @@ export default {
     itemsCount: '{count} items',
     quantity: 'Qty',
     submittedTitle: 'Submitted Orders',
+    submittedLoadFailed: 'Failed to load submitted restock orders',
     submittedEmpty: 'No restock orders have been submitted yet. Use the Restocking tab to place one.',
     submittedLeadTime: 'Lead Time',
     submittedDays: '{count} days',

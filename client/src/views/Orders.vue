@@ -31,7 +31,8 @@
         <div class="card-header">
           <h3 class="card-title">{{ t('orders.submittedTitle') }} ({{ restockOrders.length }})</h3>
         </div>
-        <p v-if="restockOrders.length === 0" class="submitted-empty">
+        <p v-if="restockError" class="submitted-empty submitted-error">{{ restockError }}</p>
+        <p v-else-if="restockOrders.length === 0" class="submitted-empty">
           {{ t('orders.submittedEmpty') }}
           <router-link to="/restocking">{{ t('nav.restocking') }}</router-link>
         </p>
@@ -59,12 +60,12 @@
                     <div class="items-dropdown">
                       <div v-for="item in ro.items" :key="item.sku" class="item-entry">
                         <span class="item-name">{{ translateProductName(item.name) }}</span>
-                        <span class="item-meta">{{ t('orders.quantity') }}: {{ item.quantity }} @ {{ formatCurrency(item.unit_cost, currentCurrency) }}</span>
+                        <span class="item-meta">{{ t('orders.quantity') }}: {{ item.quantity }} @ {{ formatMoney(item.unit_cost, currentCurrency) }}</span>
                       </div>
                     </div>
                   </details>
                 </td>
-                <td class="col-value"><strong>{{ formatCurrency(ro.total_value, currentCurrency) }}</strong></td>
+                <td class="col-value"><strong>{{ formatMoney(ro.total_value, currentCurrency) }}</strong></td>
                 <td class="col-date">{{ formatDate(ro.order_date) }}</td>
                 <td class="col-lead">{{ t('orders.submittedDays', { count: ro.lead_time_days }) }}</td>
                 <td class="col-date">{{ formatDate(ro.expected_delivery) }}</td>
@@ -131,7 +132,7 @@ import { ref, onMounted, watch, computed } from 'vue'
 import { api } from '../api'
 import { useFilters } from '../composables/useFilters'
 import { useI18n } from '../composables/useI18n'
-import { formatCurrency } from '../utils/currency'
+import { formatCurrencyWithDecimals } from '../utils/currency'
 
 export default {
   name: 'Orders',
@@ -146,6 +147,8 @@ export default {
     const orders = ref([])
     // Restock orders are not affected by the global filters (no warehouse/category)
     const restockOrders = ref([])
+    const restockError = ref(null)
+    const formatMoney = (amount, currency) => formatCurrencyWithDecimals(amount, currency, 2)
 
     // Use shared filters
     const {
@@ -160,11 +163,7 @@ export default {
       try {
         loading.value = true
         const filters = getCurrentFilters()
-        const [fetchedOrders, fetchedRestock] = await Promise.all([
-          api.getOrders(filters),
-          api.getRestockOrders()
-        ])
-        restockOrders.value = fetchedRestock
+        const fetchedOrders = await api.getOrders(filters)
 
         // Sort orders by order_date (earliest first)
         orders.value = fetchedOrders.sort((a, b) => {
@@ -176,6 +175,17 @@ export default {
         error.value = 'Failed to load orders: ' + err.message
       } finally {
         loading.value = false
+      }
+    }
+
+    // Loaded separately (once) so a restock endpoint failure can't blank the main orders table
+    const loadRestockOrders = async () => {
+      try {
+        restockError.value = null
+        restockOrders.value = await api.getRestockOrders()
+      } catch (err) {
+        console.error('Restock orders load error:', err)
+        restockError.value = t('orders.submittedLoadFailed')
       }
     }
 
@@ -210,7 +220,10 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    onMounted(() => {
+      loadOrders()
+      loadRestockOrders()
+    })
 
     return {
       t,
@@ -218,8 +231,9 @@ export default {
       error,
       orders,
       restockOrders,
+      restockError,
       currentCurrency,
-      formatCurrency,
+      formatMoney,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
@@ -275,6 +289,10 @@ export default {
   padding: 1rem 1.5rem;
   color: #64748b;
   font-size: 0.875rem;
+}
+
+.submitted-error {
+  color: #dc2626;
 }
 
 /* Items details styling */

@@ -114,6 +114,7 @@ export default {
     itemsCount: '{count}件',
     quantity: '数量',
     submittedTitle: '送信済み注文',
+    submittedLoadFailed: '送信済みの補充発注を読み込めませんでした',
     submittedEmpty: '送信済みの補充発注はまだありません。「補充発注」タブから発注してください。',
     submittedLeadTime: 'リードタイム',
     submittedDays: '{count}日',

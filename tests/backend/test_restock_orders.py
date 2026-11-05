@@ -112,3 +112,25 @@ class TestRestockOrderEndpoints:
         payload = {"budget": 1000, "items": [{"sku": "WDG-001", "quantity": 0}]}
         response = client.post("/api/restock-orders", json=payload)
         assert response.status_code == 400
+
+    @pytest.mark.parametrize("budget", ["NaN", "Infinity", "-Infinity", "-100"])
+    def test_restock_order_invalid_budget(self, client, budget):
+        """Test that non-finite or negative budgets are rejected."""
+        # Raw body because the json module can't emit NaN/Infinity as standard JSON
+        body = '{"budget": %s, "items": [{"sku": "MTR-304", "quantity": 1000}]}' % budget
+        response = client.post(
+            "/api/restock-orders", content=body, headers={"Content-Type": "application/json"}
+        )
+        assert response.status_code == 400
+        assert "budget" in response.json()["detail"].lower()
+        assert main.restock_orders == []
+
+    def test_restock_order_duplicate_sku(self, client):
+        """Test that the same SKU listed twice in one order is rejected."""
+        payload = {
+            "budget": 100000,
+            "items": [{"sku": "WDG-001", "quantity": 1}, {"sku": "WDG-001", "quantity": 2}]
+        }
+        response = client.post("/api/restock-orders", json=payload)
+        assert response.status_code == 400
+        assert main.restock_orders == []
